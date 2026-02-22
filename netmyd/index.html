@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Drive</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        dark: '#1a1b26',
+                        panel: '#24283b',
+                        accent: '#7aa2f7'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-dark text-gray-200 font-sans h-screen flex overflow-hidden">
+
+    <aside class="w-64 bg-panel flex flex-col border-r border-gray-700">
+        <div class="p-6 flex items-center space-x-3">
+            <div class="w-8 h-8 bg-gradient-to-br from-blue-400 to-purple-500 rounded-lg"></div>
+            <span class="text-xl font-bold tracking-wider">My Drive</span>
+        </div>
+
+        <nav class="flex-1 px-4 space-y-2 mt-4">
+            <button onclick="switchView('drive')" id="nav-drive" class="w-full flex items-center space-x-3 bg-gray-700/50 px-4 py-3 rounded-xl text-accent transition">
+                <i data-lucide="hard-drive"></i>
+                <span>マイドライブ</span>
+            </button>
+            
+            <button onclick="switchView('recent')" id="nav-recent" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-gray-700/30 transition text-gray-400">
+                <i data-lucide="clock"></i>
+                <span>最近のファイル</span>
+            </button>
+            
+            <button onclick="switchView('starred')" id="nav-starred" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-gray-700/30 transition text-gray-400">
+                <i data-lucide="star"></i>
+                <span>スター付き</span>
+            </button>
+            
+            <button onclick="switchView('trash')" id="nav-trash" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-gray-700/30 transition text-gray-400">
+                <i data-lucide="trash-2"></i>
+                <span>ゴミ箱</span>
+            </button>
+        </nav>
+
+        <div class="p-6">
+            <div class="bg-gray-800 rounded-xl p-4">
+                <div class="flex justify-between text-xs text-gray-400 mb-2">
+                    <span>容量</span>
+                    <span>1 GB / 5 GB</span>
+                </div>
+                <div class="w-full bg-gray-700 rounded-full h-1.5">
+                    <div class="bg-accent h-1.5 rounded-full" style="width: 20%"></div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <main id="mainArea" class="relative flex-1 flex flex-col transition-colors duration-300">
+        
+        <div id="dropOverlay" class="hidden absolute inset-0 z-50 bg-dark/90 flex-col justify-center items-center backdrop-blur-sm border-4 border-dashed border-accent/50 m-4 rounded-3xl">
+            <i data-lucide="upload-cloud" class="w-24 h-24 text-accent mb-4 animate-bounce"></i>
+            <p class="text-2xl font-bold text-white">ここにファイルをドロップ</p>
+        </div>
+
+        <header class="h-20 border-b border-gray-700 flex items-center justify-between px-8 bg-dark/50 backdrop-blur-md">
+            <div class="relative w-96">
+                <i data-lucide="search" class="absolute left-4 top-3 text-gray-400 w-5 h-5"></i>
+                <input type="text" placeholder="ファイルを検索..." class="w-full bg-panel text-white pl-12 pr-4 py-2.5 rounded-xl border border-gray-700 focus:outline-none focus:border-accent">
+            </div>
+
+            <label class="cursor-pointer bg-accent hover:bg-blue-400 text-dark font-bold py-2.5 px-6 rounded-xl flex items-center space-x-2 transition shadow-lg shadow-blue-500/20">
+                <i data-lucide="plus"></i>
+                <span id="uploadBtnText">アップロード</span>
+                <input type="file" id="fileInput" class="hidden" multiple>
+            </label>
+        </header>
+
+        <div class="flex-1 overflow-y-auto p-8">
+            <h2 id="pageTitle" class="text-lg font-semibold mb-6 text-gray-300">マイドライブ</h2>
+            
+            <div id="fileGrid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                </div>
+        </div>
+    </main>
+
+    <script>
+        // 1. Supabase設定
+        const SUPABASE_URL = 'https://tuhymxfzsexjvrxhfioh.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_DngO4HJhUeI5nm0uIvTa2A_K05t2agR';
+        
+        const { createClient } = supabase;
+        const _supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // 2. DOM要素の取得
+        const fileInput = document.getElementById('fileInput');
+        const fileGrid = document.getElementById('fileGrid');
+        const pageTitle = document.getElementById('pageTitle');
+        const mainArea = document.getElementById('mainArea');
+        const dropOverlay = document.getElementById('dropOverlay');
+        const uploadBtnText = document.getElementById('uploadBtnText');
+        
+        let currentView = 'drive';
+
+        lucide.createIcons();
+
+        // ---------------------------------------------------------
+        //  機能関数群
+        // ---------------------------------------------------------
+
+        function getStarredFiles() {
+            const stored = localStorage.getItem('myDrive_starred');
+            try { return stored ? JSON.parse(stored) : []; } catch (e) { return []; }
+        }
+
+        function toggleStar(fileName) {
+            let stars = getStarredFiles();
+            if (stars.includes(fileName)) {
+                stars = stars.filter(f => f !== fileName);
+            } else {
+                stars.push(fileName);
+            }
+            localStorage.setItem('myDrive_starred', JSON.stringify(stars));
+            loadFiles();
+        }
+
+        function switchView(view) {
+            currentView = view;
+            
+            ['drive', 'recent', 'starred', 'trash'].forEach(id => {
+                const btn = document.getElementById(`nav-${id}`);
+                btn.className = "w-full flex items-center space-x-3 px-4 py-3 rounded-xl hover:bg-gray-700/30 transition text-gray-400";
+                const icon = btn.querySelector('i');
+                if(icon) icon.classList.remove('text-red-400', 'text-accent');
+            });
+
+            const activeBtn = document.getElementById(`nav-${view}`);
+            
+            if (view === 'trash') {
+                pageTitle.innerText = "ゴミ箱";
+                activeBtn.className = "w-full flex items-center space-x-3 bg-gray-700/50 px-4 py-3 rounded-xl text-red-400 transition";
+            } else {
+                activeBtn.className = "w-full flex items-center space-x-3 bg-gray-700/50 px-4 py-3 rounded-xl text-accent transition";
+                if (view === 'drive') pageTitle.innerText = "マイドライブ";
+                if (view === 'recent') pageTitle.innerText = "最近のファイル";
+                if (view === 'starred') pageTitle.innerText = "スター付き";
+            }
+            loadFiles();
+        }
+
+        async function downloadFile(url, fileName) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('Download failed');
+                const blob = await response.blob();
+                const blobUrl = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = blobUrl;
+                link.download = fileName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                window.URL.revokeObjectURL(blobUrl);
+            } catch (error) {
+                console.error('Error downloading:', error);
+                window.open(url, '_blank');
+            }
+        }
+
+        async function moveToTrash(fileName) {
+            if (!confirm(`「${fileName}」をゴミ箱に移動しますか？`)) return;
+            const { error } = await _supabase.storage.from('files').move(fileName, `.trash/${fileName}`);
+            if (error) alert('エラー: ' + error.message);
+            else loadFiles();
+        }
+
+        async function restoreFile(fileName) {
+            if (!confirm(`「${fileName}」を復元しますか？`)) return;
+            // 復元時にも同名チェックをするのが理想ですが、今回は簡易的に移動
+            const { error } = await _supabase.storage.from('files').move(`.trash/${fileName}`, fileName);
+            if (error) alert('エラー: ' + error.message);
+            else loadFiles();
+        }
+
+        async function permanentDelete(fileName) {
+            if (!confirm(`「${fileName}」を完全に削除しますか？`)) return;
+            const { error } = await _supabase.storage.from('files').remove([`.trash/${fileName}`]);
+            if (error) alert('エラー: ' + error.message);
+            else loadFiles();
+        }
+
+        // ---------------------------------------------------------
+        //  ★ アップロード機能 (同名チェック & 日本語対応)
+        // ---------------------------------------------------------
+
+        // 既存のファイル名リストを取得する関数
+        async function getExistingFileNames() {
+            const { data, error } = await _supabase.storage.from('files').list('', { limit: 1000 });
+            if (error) return [];
+            return data.map(f => f.name); // ファイル名の配列を返す
+        }
+
+        // 重複しないファイル名を生成する関数
+        function generateUniqueName(originalName, existingNames) {
+            if (!existingNames.includes(originalName)) return originalName;
+
+            const dotIndex = originalName.lastIndexOf('.');
+            let baseName = originalName;
+            let ext = '';
+
+            if (dotIndex !== -1) {
+                baseName = originalName.substring(0, dotIndex);
+                ext = originalName.substring(dotIndex);
+            }
+
+            let counter = 1;
+            let newName = `${baseName} (${counter})${ext}`;
+
+            while (existingNames.includes(newName)) {
+                counter++;
+                newName = `${baseName} (${counter})${ext}`;
+            }
+            return newName;
+        }
+
+        async function handleUpload(files) {
+            if (currentView === 'trash') {
+                alert('ゴミ箱を表示中はアップロードできません。');
+                return;
+            }
+            if (!files || files.length === 0) return;
+
+            const originalText = uploadBtnText.innerText;
+            uploadBtnText.innerText = "準備中...";
+
+            // 1. 現在のサーバー上のファイル一覧を取得（重複チェック用）
+            const existingNames = await getExistingFileNames();
+            
+            uploadBtnText.innerText = "送信中...";
+            let errorCount = 0;
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                
+                // 2. ユニークな名前を生成 (例: test.txt -> test (1).txt)
+                // 日本語ファイル名のUnicode正規化（Mac/Windows間の互換性向上）
+                const normalizedName = file.name.normalize('NFC');
+                const uniqueName = generateUniqueName(normalizedName, existingNames);
+
+                try {
+                    // 3. 重複チェック済みの名前でアップロード
+                    const { error } = await _supabase.storage
+                        .from('files')
+                        .upload(uniqueName, file, { upsert: false }); // upsert: false (念の為上書き禁止)
+
+                    if (error) throw error;
+                    
+                    // 次のループのために、新しく作った名前もリストに追加しておく
+                    existingNames.push(uniqueName);
+
+                } catch (error) {
+                    console.error('Upload Error:', error);
+                    errorCount++;
+                }
+            }
+
+            uploadBtnText.innerText = originalText;
+            fileInput.value = '';
+
+            if (errorCount > 0) {
+                alert(`${errorCount}件のアップロードに失敗しました。`);
+            }
+            
+            loadFiles();
+        }
+
+        fileInput.addEventListener('change', (e) => {
+            handleUpload(e.target.files);
+        });
+
+        // ドラッグ＆ドロップ関連
+        mainArea.addEventListener('dragenter', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            dropOverlay.classList.remove('hidden'); dropOverlay.classList.add('flex');
+        });
+        mainArea.addEventListener('dragover', (e) => {
+            e.preventDefault(); e.stopPropagation();
+        });
+        mainArea.addEventListener('dragleave', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (!mainArea.contains(e.relatedTarget) || e.relatedTarget === null) {
+                 dropOverlay.classList.add('hidden'); dropOverlay.classList.remove('flex');
+            }
+        });
+        dropOverlay.addEventListener('dragleave', (e) => {
+            e.preventDefault(); e.stopPropagation();
+             if (e.relatedTarget === null) {
+                 dropOverlay.classList.add('hidden'); dropOverlay.classList.remove('flex');
+            }
+        });
+        mainArea.addEventListener('drop', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            dropOverlay.classList.add('hidden'); dropOverlay.classList.remove('flex');
+            handleUpload(e.dataTransfer.files);
+        });
+
+
+        // ---------------------------------------------------------
+        //  メイン描画処理
+        // ---------------------------------------------------------
+        async function loadFiles() {
+            fileGrid.innerHTML = '<p class="text-gray-500 col-span-full text-center py-20">読み込み中...</p>';
+
+            const searchFolder = currentView === 'trash' ? '.trash' : '';
+            
+            const { data, error } = await _supabase.storage.from('files').list(searchFolder, {
+                limit: 100,
+                offset: 0,
+                sortBy: { column: 'created_at', order: 'desc' },
+            });
+
+            if (error) {
+                console.error('Supabase Error:', error);
+                fileGrid.innerHTML = '<p class="text-red-400 col-span-full text-center">読み込みエラーが発生しました</p>';
+                return;
+            }
+
+            let files = data.filter(item => item.name !== '.trash');
+            const starredFiles = getStarredFiles();
+
+            if (currentView === 'starred') {
+                files = files.filter(file => starredFiles.includes(file.name));
+            } 
+
+            fileGrid.innerHTML = '';
+
+            if (files.length === 0) {
+                let msg = 'ファイルがありません。';
+                if (currentView === 'trash') msg = 'ゴミ箱は空です。';
+                if (currentView === 'starred') msg = 'スター付きのファイルはありません。<br>マイドライブで☆を押すと追加されます。';
+                fileGrid.innerHTML = `<p class="text-gray-500 col-span-full text-center py-20">${msg}</p>`;
+                return;
+            }
+
+            files.forEach(file => {
+                const isImage = file.metadata?.mimetype?.startsWith('image/');
+                // ファイル名に含まれるシングルクォートのエスケープ
+                const safeName = file.name.replace(/'/g, "\\'");
+                
+                const pathPrefix = currentView === 'trash' ? '.trash/' : '';
+                const fullPath = pathPrefix + file.name;
+                
+                // ★★★ 日本語ファイル対応の修正ポイント ★★★
+                // ファイルパス部分をURLエンコードする
+                // fullPath.split('/').map(encodeURIComponent).join('/') でパスの各階層をエンコードするのが確実
+                const encodedPath = fullPath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+                const fileUrl = `${SUPABASE_URL}/storage/v1/object/public/files/${encodedPath}`;
+                
+                // JS関数に渡すURLはエスケープのみ行う
+                const safeUrl = fileUrl.replace(/'/g, "\\'");
+
+                const date = new Date(file.created_at);
+                const dateStr = date.toLocaleDateString('ja-JP') + ' ' + date.getHours() + ':' + String(date.getMinutes()).padStart(2, '0');
+
+                const isStarred = starredFiles.includes(file.name);
+                const starColorClass = isStarred ? "fill-yellow-400 text-yellow-400" : "text-gray-600 hover:text-yellow-400";
+
+                let iconHtml = `<i data-lucide="file" class="w-12 h-12 text-gray-400 mb-3"></i>`;
+                if (isImage) {
+                    iconHtml = `<div class="w-full h-32 mb-3 overflow-hidden rounded-lg"><img src="${fileUrl}" class="w-full h-full object-cover transform group-hover:scale-110 transition duration-500" alt="${file.name}"></div>`;
+                } else if (file.name.endsWith('.pdf')) {
+                    iconHtml = `<i data-lucide="file-text" class="w-12 h-12 text-red-400 mb-3"></i>`;
+                } else if (file.name.endsWith('.csv') || file.name.endsWith('.xlsx')) {
+                    iconHtml = `<i data-lucide="sheet" class="w-12 h-12 text-green-500 mb-3"></i>`;
+                }
+
+                let actionButtonsHtml = '';
+                let starButtonHtml = '';
+
+                if (currentView === 'trash') {
+                    actionButtonsHtml = `
+                        <button onclick="restoreFile('${safeName}')" class="flex-1 py-3 flex items-center justify-center space-x-2 text-gray-400 hover:text-green-400 hover:bg-gray-700/80 transition">
+                            <i data-lucide="rotate-ccw" class="w-4 h-4"></i><span class="text-xs font-bold">復元</span>
+                        </button>
+                        <button onclick="permanentDelete('${safeName}')" class="flex-1 py-3 flex items-center justify-center space-x-2 text-gray-400 hover:text-red-500 hover:bg-red-500/10 transition">
+                            <i data-lucide="x" class="w-4 h-4"></i><span class="text-xs font-bold">消去</span>
+                        </button>
+                    `;
+                } else {
+                    actionButtonsHtml = `
+                        <button onclick="downloadFile('${safeUrl}', '${safeName}')" class="flex-1 py-3 flex items-center justify-center space-x-2 text-gray-400 hover:text-accent hover:bg-gray-700/80 transition">
+                            <i data-lucide="download-cloud" class="w-4 h-4"></i><span class="text-xs font-bold">保存</span>
+                        </button>
+                        <button onclick="moveToTrash('${safeName}')" class="flex-1 py-3 flex items-center justify-center space-x-2 text-gray-400 hover:text-red-400 hover:bg-gray-700/80 transition">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i><span class="text-xs font-bold">削除</span>
+                        </button>
+                    `;
+                    
+                    starButtonHtml = `
+                        <button onclick="toggleStar('${safeName}')" class="absolute top-2 right-2 p-2 rounded-full bg-dark/40 hover:bg-dark transition z-20 shadow-md backdrop-blur-sm group/star" title="スターを付ける/外す">
+                            <i data-lucide="star" class="w-4 h-4 ${starColorClass} transition-colors"></i>
+                        </button>
+                    `;
+                }
+
+                const cardHtml = `
+                    <div class="relative bg-panel rounded-2xl border border-transparent hover:border-gray-600 transition group flex flex-col overflow-hidden shadow-sm hover:shadow-xl">
+                        ${starButtonHtml}
+                        <div class="p-4 flex flex-col items-center flex-1 cursor-default">
+                            ${iconHtml}
+                            <div class="w-full text-center">
+                                <p class="text-sm font-medium truncate text-gray-200" title="${file.name}">${file.name}</p>
+                                <div class="flex justify-between items-center px-2 mt-2 w-full">
+                                    <p class="text-[10px] text-gray-500">${(file.metadata ? file.metadata.size / 1024 / 1024 : 0).toFixed(2)} MB</p>
+                                    <p class="text-[10px] text-gray-600">${dateStr}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex border-t border-gray-700 bg-gray-800/50 divide-x divide-gray-700 mt-auto">
+                            ${actionButtonsHtml}
+                        </div>
+                    </div>
+                `;
+                fileGrid.innerHTML += cardHtml;
+            });
+            lucide.createIcons();
+        }
+
+        // 初期ロード
+        loadFiles();
+    </script>
+</body>
+</html>
